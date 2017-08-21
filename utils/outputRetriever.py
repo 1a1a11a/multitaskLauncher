@@ -68,14 +68,7 @@ class outputRetriever:
 
 	def retrieve_output_s3(self, username, node, source, destination, supplemental_err_msg=None):
 		
-
-		
-		# retrieve output, use rsync may give much better performance if output is huge 
-		p = subprocess.run("scp -r {}@{}:{} {}".format(self.username, node, source, destination), 
-						shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-		if len(p.stderr):
-			WARNING("failed to retrieve from node {}:{} to {}, error {}, more msg: {}".format(
-				node, source, destination, p.stderr.decode("utf-8").strip(string.whitespace), supplemental_err_msg))
+		print("not supported yet")
 		return -1 
 
 

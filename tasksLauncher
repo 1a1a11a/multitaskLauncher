@@ -24,6 +24,8 @@ import argparse
 
 print_level = "info" 
 sys.path.append(os.getcwd())
+sys.path.append(os.path.join(os.getcwd(), "utils"))
+
 from utilPrinting import * 
 from utilNode import * 
 from monitoring import monitoring_run
