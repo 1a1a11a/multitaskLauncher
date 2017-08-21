@@ -19,7 +19,7 @@ way to run the jobs on the machine pool?
 -   No, neither of these approaches is ideal, they take time and can make a
     mess.
 
- 
+### What is multitaskLauncher 
 
 __multitaskLaucher is such a tool that you only need to write down all the tasks you want to run and where you want to save the results, it will take care of the rest. It will launch the jobs on each worker node, monitor the task running status, retrieve the results when it finishes and launch new task on the node.__
 
@@ -27,13 +27,11 @@ __In addition, it supports checking the task running status and node health stat
 
 __As one more feature, it will open a http service on port 5002 for easy checking task and node status, so that you can use http://127.0.0.1:5002 for checking the status of each task and each node.__
 
- 
 
 Currently only tested on Ubuntu and macOS, but it should support all \*NIX, the
 machine that submits jobs should have python3.5+ installed. And current version
 uses ssh heavily, which is not optimized.
 
- 
 
 ### Roadmap: 
 
@@ -45,14 +43,11 @@ uses ssh heavily, which is not optimized.
 
  
 
- 
-
 Preparations Needed Before Use 
 -------------------------------
 
 Please ensure that you can login into each machine/VM using default pubKey.
 
- 
 
 How to Use 
 -----------
