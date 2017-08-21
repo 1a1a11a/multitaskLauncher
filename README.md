@@ -17,15 +17,22 @@ way to run the jobs on the machine pool?
     the results and launch new job when old ones finish?
 
 -   No, neither of these approaches is ideal, they take time and can make a
-    mess.
+    mess. 
+    
 
 ### What is multitaskLauncher 
 
-__multitaskLaucher is such a tool that you only need to write down all the tasks you want to run and where you want to save the results, it will take care of the rest. It will launch the jobs on each worker node, monitor the task running status, retrieve the results when it finishes and launch new task on the node.__
+__multitaskLaucher is such a tool that you only need to specify all the tasks you want to run and where you want to save the results, it will take care of the rest.__ 
 
-__In addition, it supports checking the task running status and node health status in command line.__
+### Features 
 
-__As one more feature, it will open a http service on port 5002 for easy checking task and node status, so that you can use http://127.0.0.1:5002 for checking the status of each task and each node.__
+-   multitaskLauncher launches the jobs on each worker node, monitor the task running status, retrieve the results when it finishes and launch new task on the node automatically. 
+
+-   It supports checking the task running status and node health status in command line. 
+
+-   As one more feature, it will open a http service on port 5002 for easy checking task and node status, so that you can use http://127.0.0.1:5002 for checking the status of each task and each node. 
+
+-   All these features do not require you to install package on the worker node. 
 
 
 Currently only tested on Ubuntu and macOS, but it should support all \*NIX, the
@@ -39,7 +46,9 @@ uses ssh heavily, which is not optimized.
 
 2.  Add AWS support, including EC2 and S3.
 
-3.  Use paramiko to replace subprocess run ssh.
+3.  Use paramiko to replace subprocess run ssh. 
+
+4.  Add support for docker. 
 
  
 
