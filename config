@@ -1,0 +1,13 @@
+[nodes]
+node1=lab1a.mathcs.emory.edu
+node2=lab1b.mathcs.emory.edu
+
+[login]
+username=testuser
+password=
+key=
+
+[monitoring]
+enabled=true
+open_to_public=true 
+port=5002

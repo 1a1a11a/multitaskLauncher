@@ -1,0 +1,55 @@
+[basic]
+jobname=akamaiStatic0816
+
+
+[initialization]
+# put initialization or common tasks here 
+init_script_loc=
+
+[tasks]
+# suggesting using absolute path for both commands and paths 
+task1=pwd 
+task2=mkdir /home/jyan254/test/test/2
+task3=mkdir /home/jyan254/test/test/3
+task4=ls /var/dept/scratch/ 
+task5=touch 5
+task6=touch 6
+task7=sleep 20
+task8=sleep 20
+task9=sleep 20
+task10=sleep 20
+task11=sleep 20
+task12=sleep 20
+task13=sleep 20
+task14=sleep 20
+task15=sleep 20
+task16=touch 16
+task17=sleep 20
+
+
+[setting]
+# default working_directory: user home directory 
+working_directory=/home/jyan254/t
+
+# how many experiments on one node at the same time, default: 1
+experiment_per_node=1
+
+# how often check each node (unit: second), default: 60
+job_check_interval=2
+
+# the maximum RAM used by a single task, currently this is not used 
+max_task_RAM=
+
+
+[requirements]
+# only use MB and GB for memory size 
+RAM=4GB 
+max_allowed_load=2
+
+
+[output]
+# available choice scp, rsync, S3, 
+tool=scp 		
+
+# default output folder: jobname.Year-Month-Day-Hour under working directory 
+output_folder=

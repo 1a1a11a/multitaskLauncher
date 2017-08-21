@@ -1,0 +1,76 @@
+<html>
+    <head>
+        <title>node status</title>
+    </head>
+    <body>
+        <h1> The status of all nodes, update time {{ ptime }} </h1>
+        </hr>
+
+        <form action="/worker_status" method="post">
+            <!-- <input type="submit" name="start" value="Start Workers"> -->
+            <input type="submit" name="stop" value="Stop tasks"> 
+            <input type="submit" name="restart" value="Restart">
+            <input type="submit" name="refresh" value="Refresh"> 
+<!--             <hr>
+            threads:    <input type="text" name="threads"><br>
+            partitions: <input type="text" name="partitions"><br> 
+            <input type="submit" name="submit" value="Submit"> 
+            <hr> 
+ -->        </form> 
+
+        <table border="2" cellpadding="5" cellspacing="5" bgcolor="bisque" width="200">
+            <tr>
+                <th>task</th>
+                <th>status</th>
+                <th>command</th>
+                <th>submit time</th>
+                <th>last check time</th>
+                <th>remote pid</th>
+                <th>executing nodes</th>
+            </tr>
+
+            {% for (task) in tasks %}
+            <tr>
+                <td>{{ task[0] }}</td>
+                <td>{{ task[1] }}</td>
+                <td>{{ task[2] }}</td>
+                <td>{{ task[3] }}</td>
+                <td>{{ task[4] }}</td>
+                <td>{{ task[5] }}</td>
+                <td>{{ task[6] }}</td>
+            </tr>
+            {% endfor %}
+
+        </table>
+        <hr>
+
+
+        <table border="2" cellpadding="5" cellspacing="5" bgcolor="yellow" width="200">
+            <tr>
+                <th>node</th>
+                <th>total threads</th>
+                <!-- <th>running threads</th> -->
+                <th>CPU usage</th>
+                <th>memory used (MB)</th>
+                <th>memory total (MB)</th>
+                <th>disk (read/write)</th>
+                <th>network (send/recv)</th>
+            </tr>
+
+            {% for (worker_status) in workers %}
+            <tr>
+                <td>{{ worker_status[0] }}</td>
+                <td>{{ worker_status[1][0] }}</td>
+                <td>{{ worker_status[1][1] }}</td>
+                <td>{{ worker_status[1][2] }}</td>
+                <td>{{ worker_status[1][3] }}</td>
+                <td>{{ worker_status[1][4] }}</td>
+                <td>{{ worker_status[1][5] }}</td>
+            </tr>
+            {% endfor %}
+
+        </table>
+
+
+    </body>
+</html>

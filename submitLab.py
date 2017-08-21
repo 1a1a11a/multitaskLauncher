@@ -1,0 +1,618 @@
+#!/usr/bin/env python3 
+""" a script for submitting a list of tasks to a pool of machines 
+
+no dependecy is needed except ssh 
+because it only uses ssh and does not keep connection, so it is costy, 
+however, this does not matter in most circumstances 
+
+[description]
+"""
+
+
+
+import os, sys, time, socket, string 
+import glob 
+from collections import defaultdict 
+import subprocess 
+import threading 
+from multiprocessing import Process 
+from pprint import pprint, pformat
+import random 
+import configparser 
+import argparse
+
+
+print_level = "info" 
+sys.path.append(os.getcwd())
+from utilPrinting import * 
+from utilNode import * 
+from monitoring import monitoring_run
+from taskModule import taskClass
+from outputRetriever import outputRetriever 
+
+class initializer:
+	@staticmethod
+	def init_login(nodes_dict):
+		INFO("#################### now initialize connection with worker nodes ###################")
+		pubKeys = glob.glob("~/.ssh/*.pub")
+		if len(pubKeys) == 0:
+			subprocess.run("ssh-keygen", shell=True)
+
+		for node, nodeinfo in nodes_dict.items():
+			username = nodeinfo[0]
+			subprocess.run("ssh-copy-id {}@{}".format(username, node), shell=True) 
+
+
+
+
+class multiTaskSubmitter:
+	def __init__(self, config_loc="config", task_loc="task"): 
+		self.config_loc 			= 		config_loc 
+		self.task_loc 				= 		task_loc 
+
+		# listening thread 
+		self.exit_signal 			= False 
+		self.listen_thread 			= threading.Thread(target=self.listening)
+		self.listen_thread.start() 
+
+
+		self.monitoring 			= 		False 
+		self.monitoring_scope 		= 		"public" 
+		self.monitoring_port 		= 		5002 
+		self.config_parser 			= 		self.parse_config()
+		self.task_parser 			= 		self.parse_tasks()
+		self.tasks 					= 		self.prepare_tasks()
+		self.output_retriever 		=		outputRetriever("scp")	# default 
+
+		self.init_variables()
+		self._get_available_nodes()
+
+
+		# monitoring service 
+		if self.monitoring:
+			self.monitoring_process = Process(target=monitoring_run, 
+						args=(self.monitoring_scope, self.monitoring_port))
+			self.monitoring_process.start() 
+			INFO("monitoring service started")
+
+
+		# wait for user command to begin 
+		self.allow_submit_tasks = False 
+		while not self.allow_submit_tasks:
+			time.sleep(1)
+		self.submit_tasks()
+
+
+	def parse_config(self):
+		assert os.path.exists(self.config_loc), "cannot find config file, default is {}".format(self.config_loc)
+		cparser = configparser.ConfigParser() 
+		cparser.read(self.config_loc)
+
+		assert "nodes" in cparser, "cannot find computing nodes in config file"
+		assert "node1" in cparser["nodes"], "nodes section does not have node1, "\
+						"all nodes name should have the following form node1, node2, node3 ..."
+		assert "login" in cparser, "cannot find login info in config file"
+		assert "username" in cparser["login"], "cannot find username under login section"
+
+		if 'monitoring' in cparser and cparser["monitoring"]["enabled"].lower().strip() == 'true':
+			self.monitoring = True 
+			if 'open_to_public' in cparser["monitoring"] and cparser["monitoring"]["open_to_public"] == "true": 
+				self.monitoring_scope = "public" 
+			else:
+				self.monitoring_scope = "local" 
+
+			if 'port' in cparser["monitoring"]: 
+				self.monitoring_port = int(cparser["monitoring"]["port"]) 
+
+
+		return cparser 
+
+
+	def parse_tasks(self): 
+		assert os.path.exists(self.task_loc), "cannot find task file, default is {}".format(self.task_loc)
+		cparser = configparser.ConfigParser() 
+		cparser.read(self.task_loc)
+
+		assert "basic" in cparser, "cannot find basic info in taks file"
+		assert "jobname" in cparser["basic"], "cannot find jobname in section basic"
+
+		assert "tasks" in cparser, "cannot find tasks info in task file"
+		assert "setting" in cparser, "cannot find setting in task file"
+
+
+		return cparser 
+
+
+	def prepare_tasks(self):
+		""" read task config and return a task dict: 
+					taskname -> (taskcommand_list_format, taskcommand_str_format)
+				
+		Returns:
+			tasks [dict] -- see above 
+		"""
+		tasks = {} 
+		for task_item in sorted(list(self.task_parser["tasks"].items()), key=lambda x: x[0]):
+			taskname = task_item[0]
+			taskcommand = task_item[1]
+			task = taskClass(taskname, taskcommand)
+			tasks[taskname] = task 
+		return tasks 
+
+
+	def init_variables(self):
+		""" initialize all class variables 
+		
+		[description]
+		"""
+		self.username = self.config_parser["login"]["username"] 
+		self.experiments_per_node = int(self.task_parser["setting"]["experiment_per_node"])
+		
+		self.init_script_loc = None 
+		if "initialization" in self.task_parser and len(self.task_parser["initialization"]["init_script_loc"]): 
+			self.init_script_loc = self.task_parser["initialization"]["init_script_loc"]
+			INFO("initializing node using {}".format(self.init_script_loc))
+
+		# default job check interval is sixty second 
+		self.job_check_interval = 60 
+		if "job_check_interval" in self.task_parser["setting"] and \
+			self.task_parser["setting"]["job_check_interval"]: 
+			self.job_check_interval = int(self.task_parser["setting"]["job_check_interval"])
+			INFO("set job check interval {}".format(self.job_check_interval)) 
+
+		# default working directory: user home directory 
+		if "working_directory" not in self.task_parser["setting"] or \
+			len(self.task_parser["setting"]["working_directory"]) == 0: 
+			node = list(self.config_parser["nodes"].keys())[0]
+			INFO("user does not specify working direcoty, "\
+					"try to use the home directory of {} as working directory".format(node))
+
+			self.working_directory = subprocess.run("ssh {}@{} -q -o StrictHostKeyChecking=no pwd".format(
+							self.username, node), 
+							shell=True, stdout=subprocess.PIPE).\
+					stdout.decode("utf-8").strip(string.whitespace) 
+			if len(self.working_directory) == 0:
+				self.working_directory = "/home/{}".format(self.username) 
+				WARNING("failed to obtain home directory from node {}, using /home/{}".format(
+								node, self.username))
+			INFO("obtained working directory {}".format(self.working_directory)) 					
+		else: 
+			self.working_directory = self.task_parser["setting"]["working_directory"]
+			INFO("set working directory: {}".format(self.working_directory))
+
+		# default output folder jobname.Year-Month-Day-Hour under working directory
+		# dont join output_folder with working directory as there is no good way doing this, 
+		# instead, on remote machines, just cd working directory and execute commands 
+		if "output_folder" not in self.task_parser["output"] or \
+			len(self.task_parser["output"]["output_folder"]) == 0: 
+			self.output_folder = "{}.{}".format(self.task_parser["basic"]["jobname"], 
+								time.strftime("%Y-%m-%d-%H", time.localtime(time.time())))
+		else:
+			self.output_folder = self.task_parser["output"]["output_folder"] 
+
+		# output tool 
+		if "tool" in self.task_parser["output"] and len(self.task_parser["output"]["tool"]) != 0: 
+			self.output_retriever = outputRetriever(self.task_parser["output"]["tool"])
+		
+		INFO("set output folder {}, synchronize output using {}".format(self.output_folder, 
+																self.output_retriever.tool))
+
+		# initialize instance variable 
+		self.n_tasks 			= 	len(self.tasks)
+		self.n_running_tasks 	= 	0 
+		self.n_finished_tasks 	= 	0 
+		self.running_tasks 		= 	defaultdict(list)
+
+
+	def _verify_requirements(self, node, nh):
+		"""verify whether a given node satisfy the requirements specified in task config 
+			currently support requirement: RAM and load 	
+
+		Arguments:
+			nh {nodeHealth} -- node_health
+		"""
+
+		if "requirements" in self.task_parser:
+			# check RAM 
+			if 'RAM' in self.task_parser["requirements"]:
+				RAM_requirement = int(self.task_parser["requirements"]["RAM"].replace("GB", "000").replace("MB", ""))
+				if int(nh.memory_total) - int(nh.memory_used) < RAM_requirement: 
+					WARNING("RAM does not meet requirement, node {}, memory used {}/{} MB, require {}MB".format(
+						node, nh.memory_used, nh.memory_total, RAM_requirement))
+					return False 
+
+			# check load 
+			if 'max_allowed_load' in self.task_parser["requirements"]: 
+				max_allowed_load = float(self.task_parser["requirements"]["max_allowed_load"])
+				if float(nh.loadavg) > max_allowed_load: 
+					WARNING("max allowed load exceed requirements, node {}, load {}, require {}".format(
+						node, float(nh.loadavg), max_allowed_load))
+					return False  
+		return True 
+
+
+	def _get_available_nodes(self):
+		""" generate nodes file and 
+			get all the nodes information from the nodes file (same file used in monitoring service), 
+			Attention, this is not using the config file 
+			then verify whether the node is online or not, and whether it satisfies requirements
+		"""
+		self.available_nodes = []
+		self._generate_nodes_file_for_monitoring()
+		self.all_nodes = load_nodes_file({})
+		get_node_health_mt(self.all_nodes, n_threads=48, print_out=False)
+		for node, nodeinfo in self.all_nodes.items():
+			# nodeinfo = (username, nodeHealth)
+			if nodeinfo[1].n_threads == -1: 
+				# double check 
+				nh = check_node_health(nodeinfo[0], node)
+				if nh.n_threads == -1:
+					# still not available 
+					WARNING("node is not online: {}".format(node))
+					continue 
+				else:
+					self.all_nodes[node] = (nodeinfo[0], nh)
+					nodeinfo = self.all_nodes[node] 
+
+			nh = nodeinfo[1]
+			if self._verify_requirements(node, nh):
+				if self.init_script_loc: 
+					self.perform_node_initialization(self.init_script_loc, nodeinfo[0], node)
+				self.available_nodes.append(node)
+
+		self.available_nodes.sort()
+		self.n_nodes = len(self.available_nodes)
+
+
+
+	def _generate_nodes_file_for_monitoring(self):
+		""" generate nodes info file, which is used both in 
+			monitoring service and self._get_available_nodes 
+		
+		"""
+		with open("nodes", "w") as ofile:
+			for node in self.config_parser["nodes"].items():
+				ofile.write("{}@{}\n".format(self.username, node[1])) 
+
+
+	def perform_node_initialization(self, init_script_loc, username, node):
+		""" transfer the init_script to remote machines, 
+		and perform initialization on the remote machines 
+		
+		[description]
+		
+		Arguments:
+			init_script_loc {str} -- path to initialization script 
+		"""
+		self.submit_single_job_with_script("executing initialization script", username, node, 
+												script_loc=init_script_loc, del_script=False) 
+
+
+
+
+
+	@staticmethod
+	def prepare_remote_script(taskname, taskcommand, output_folder, 
+								cwd=None, script_loc="task.sh"):
+		"""this func prepares the script that will execute the command on remote node, 
+			then print the process id
+			we may want to upload or transfer the computed results back 
+		""" 
+		if cwd is None:
+			cwd = "~"
+		with open(script_loc, 'w') as ofile:
+			if isinstance(taskcommand, list) and len(taskcommand) > 1:
+				taskcommand = " ".join(taskcommand)
+			taskcommand = "{} > {}/{}".format(taskcommand, output_folder, taskname) 
+			if cwd is not None: 
+				ofile.write("cd {}\n".format(cwd))
+			ofile.write("mkdir {} 2>/dev/null\n".format(output_folder))
+			ofile.write("nohup {} &\n".format(taskcommand))
+			ofile.write("echo $!\nsleep 2")
+		os.system("chmod +x {}".format(script_loc))
+
+
+	@staticmethod 
+	@DeprecationWarning
+	def prepare_task_for_remote(username, node, taskname, taskcommand, output_folder): 
+		# new_command = ["ssh", "{}@{}".format(username, node)] # , "screen", "-S", taskname, "-dm"] 
+		new_command = ["ssh", "{}@{}".format(username, node), "bash", "-c"] 
+
+		taskcommand[0] = '"' + taskcommand[0]
+
+		new_command.extend(taskcommand)
+		new_command.extend([">", "{}/{}".format(output_folder, taskname), "&", "echo", "$!"])
+
+		new_command[-1] = new_command[-1] + '"'
+
+
+		return new_command
+		# return " ".join(new_command) 
+
+
+	@staticmethod
+	@DeprecationWarning
+	def submit_single_job(name, command, cwd): 
+		print(command)
+		# print(" ".join(command))
+		p = subprocess.run(command, shell=False, cwd=cwd, 
+							stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		# p = subprocess.run(command, shell=False, cwd=cwd)
+		if (p.returncode != 0):
+			print("submit task failed {}: {}, return code {}\nstdout: {}\nstderr: {}".\
+				format(name, command, p.returncode, p.stdout.decode("utf-8"), p.stderr.decode("utf-8"))) 
+			return -1 
+
+		stdout = p.stdout.decode("utf-8")
+		pid = int(stdout.strip(string.whitespace)) 
+		return pid 
+
+
+	def submit_single_job_with_script(self, taskname, username, node, script_loc="task.sh", del_script=True): 
+		"""
+		submit single job using the approach of remotely executing prepared script 
+		"""
+
+		# send task script 
+		p_scp = subprocess.run("scp -q {} {}@{}:/tmp/{}".format(script_loc, username, node, script_loc), 
+								shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		if p_scp.returncode != 0:
+			ERROR("sending task script failed {}: {}, return code {}\nstdout: {}\nstderr: {}".\
+				format(taskname, self.tasks[taskname].taskcommand, p_scp.returncode, 
+						p_scp.stdout.decode("utf-8"), p_scp.stderr.decode("utf-8"))) 
+			return -1 
+
+		# execute script 
+		p = subprocess.run("ssh -q -o StrictHostKeyChecking=no {}@{} bash -c /tmp/{}".format(username, node, script_loc), 
+							shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		if (p.returncode != 0):
+			# with open(script_loc) as ifile:
+				# command = ifile.read()
+			ERROR("submit task failed {}: {}, return code {}\nstdout: {}\nstderr: {}".\
+				format(taskname, self.tasks[taskname].taskcommand, p.returncode, 
+					p.stdout.decode("utf-8"), p.stderr.decode("utf-8"))) 
+			return -1 
+
+		# obtain task pid 
+		stdout = p.stdout.decode("utf-8")	
+		pid = int(stdout.strip(string.whitespace)) 
+		if del_script:
+			os.remove(script_loc)
+		return pid 
+
+
+	def submit_tasks(self, async=True, stop_on_error=True):
+		""" submit jobs to nodes 
+		
+		This is the main function
+		it submits all tasks to nodes one by one, multithreading is not used here 
+		otherwise the output can be confusing. 
+		when all nodes are full load, it waits and checks periodically, 
+		if a task finishes, then submit a new one, until all tasks are submitted. 
+		Then it waits until all tasks are finished, 
+		when all tasks are finished, it joins the listening thread and kills the monitoring service.  
+
+		
+		Keyword Arguments:
+			async {bool} -- [description] (default: {True})
+			stop_on_error {bool} -- [description] (default: {True})
+		"""
+		INFO("begin submitting jobs")
+		current_node_ind = 0 
+
+
+		task_list = sorted(list(self.tasks.items()), key=lambda x:x[0])		# a list of (taskname, taskClass)
+		current_command_ind = 0
+
+		while self.n_running_tasks < self.n_tasks:
+			if current_node_ind == self.n_nodes:
+				INFO("all nodes are full load right now, submitted {}/{} jobs, "\
+					"waiting for some tasks finish".format(self.n_running_tasks, self.n_tasks))
+				time.sleep(self.job_check_interval)
+				self.update_tasks_status()
+				current_node_ind = 0 
+
+			taskname = task_list[current_command_ind][0]
+			task = task_list[current_command_ind][1] 
+			script_loc = "task.sh"
+			
+			# find available nodes 			
+			node = self.available_nodes[current_node_ind]
+			while len(self.running_tasks[node]) == self.experiments_per_node:
+				current_node_ind += 1
+				if current_command_ind >= self.n_nodes - 1:
+					node = None 
+					break 
+				node = self.available_nodes[current_node_ind]
+			if node is None:
+				continue 
+
+			multiTaskSubmitter.prepare_remote_script(taskname, task.taskcommand, self.output_folder, 
+								self.working_directory, script_loc) 
+													
+			# create output folder
+			subprocess.run("ssh -q {}@{} -o StrictHostKeyChecking=no cd {} && mkdir -p {} 2>/dev/null".format(
+							self.username, node, self.working_directory, self.output_folder), shell=True, 
+							stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+			# submit job 
+			pid = self.submit_single_job_with_script(taskname, self.username, node, script_loc)
+
+			if pid != -1: 
+				INFO("submit {}: \t\"{}\" \tto node {}, pid {}".format(taskname, task.taskcommand, node, pid))
+				self.running_tasks[node].append((taskname, task.taskcommand, pid))
+				self.tasks[taskname].status = "submitted"
+				self.tasks[taskname].submit_time = time.strftime("%H:%M:%S", time.localtime(time.time()))
+				self.tasks[taskname].executing_nodes.append(node)
+				self.tasks[taskname].pid = pid 
+			else:
+				ERROR("submit {} to node {} failed, pid {}".format(taskname, node, pid))
+				self.tasks[taskname].status = "failed"
+			
+			# update index 
+			current_command_ind += 1 
+			self.n_running_tasks += 1
+
+			# whether current node has enough tasks 
+			if len(self.running_tasks[node]) == self.experiments_per_node:
+				current_node_ind += 1
+		INFO("all tasks have been submitted")
+
+		last_check_n_finished_tasks = 0 
+		while self.n_finished_tasks < self.n_tasks:
+			self.update_tasks_status()
+			# if last_check_n_finished_tasks != self.n_finished_tasks: 
+			INFO("finished task {}/{}".format(self.n_finished_tasks, self.n_tasks), end="\r")
+			time.sleep(self.job_check_interval)
+
+		INFO("all tasks have finished and results have been retrieved, hit enter to exit")
+		try:
+			os.remove("task.status")
+			os.remove("nodes")
+		except:
+			pass 
+		self.monitoring_process.terminate()
+		self.monitoring_process.join() 
+		self.exit_signal = True 
+		self.listen_thread.join()
+
+		# get all output back 
+		# retrieving output has been done in checking status step 
+		# subprocess.run("scp -r {}@{}:{} ./".format(self.username, node, self.output_folder), shell=True)
+
+
+	def update_tasks_status(self):
+		lock = threading.Lock()
+		threads = []
+		for node, task_list in self.running_tasks.items(): 
+			for task in task_list:  	# task_list is a list of (taskname, taskcommand, pid)
+				t = threading.Thread(target=self._check_task_status_and_update, 
+					args=(self.username, node, task, lock, self.running_tasks))
+				threads.append(t)
+				t.start()
+		for t in threads:
+			t.join()
+		DEBUG("checked {} tasks".format(len(threads)))
+		with open("task.status", "w") as ofile:
+			for taskname, task in self.tasks.items(): 
+				ofile.write("{}\n".format(str(task)))
+
+
+
+
+	def check_task_status(self, username, node, pid):
+		return subprocess.run("ssh -q {}@{} -o StrictHostKeyChecking=no kill -0 {}; echo $?".format(username, node, pid), 
+			shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.decode("utf-8").strip(string.whitespace)
+
+
+	def _check_task_status_and_update(self, username, node, task, lock, running_tasks):
+		taskname = task[0]
+		taskcommand = task[1]
+		taskpid = task[2] 
+
+		status = self.check_task_status(username, node, taskpid)
+		self.tasks[taskname].last_check_time = time.strftime("%H:%M:%S", time.localtime(time.time()))
+
+		if int(status) == 1:		# not running or finished 
+			lock.acquire()
+			running_tasks[node].remove(task)
+			self.tasks[taskname].status = "finished"
+			self.n_finished_tasks += 1 
+			
+			self.output_retriever.retrieve(username, node, self.output_folder, supplemental_err_msg=str(task))
+			# self.retrieve_output(param username, param node, param output_folder)
+
+
+			lock.release() 
+
+	@DeprecationWarning
+	def retrieve_output_scp(self, username, node, output_folder):
+		# retrieve output, use rsync may give much better performance if output is huge 
+		p = subprocess.run("scp -r {}@{}:{} ./".format(self.username, node, self.output_folder), 
+						shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+		if len(p.stderr):
+			WARNING("failed to retrieve output from node {} task {}, error {}".format(
+									node, task, p.stderr.decode("utf-8").strip(string.whitespace)))
+
+
+
+	def listening(self):
+		available_commands = { \
+		"help": 			"print usage information"
+		, "submit":			"begin to submit tasks"
+		, "task": 			"all tasks, including submitted and non-submitted"
+		, "running": 		"all running tasks"
+		, "node":			"check node health, for example its current memory and CPU usage"
+		, "exit":			"exit program, but these won't kill all the launched tasks"
+		, "killall":		"kill all launched jobs (not supported yet)"
+		# TODO 
+#		, "killsumitted":	"not supported yet"
+		, "kill taskname":	"kill a certain task (not supported yet)"
+		}
+
+		command = ""
+		while len(command.strip().split()) < 1:
+			command = input("######### please type your command any time, supported command: ##########\n{}\n".\
+							format(list(available_commands.keys()))).lower()
+			command_split = command.strip().split()
+		while not self.exit_signal and command_split[0] != "exit" and command_split[0] != 'quit':
+			try: 
+				if command_split[0] == "task":
+					for taskname, task in self.tasks.items():
+						print("{}".format(task))
+				elif command_split[0] == "submit":
+					self.allow_submit_tasks = True
+
+				elif command_split[0] == "running":
+					for taskname, taskinfo in self.running_tasks.items(): 
+						print("{} {}".format(taskname, taskinfo))	
+				elif command_split[0] == "node":
+					for node in sorted(self.available_nodes):
+						check_node_health(self.username, node, print_out=True)
+				elif command_split[0] == "killall": 
+					# exec_code_on_nodes_mt(self.all_nodes, "killall -u {}".format(self.username))
+					for node, nodeinfo in self.all_nodes.items(): 
+						exec_code_on_node(self.username, node, "killall -u {}".format(self.username))
+						INFO("{} killed".format(node), end="\r") 
+				elif command_split[0] == "help": 
+					print("command\t\t\tdetails")
+					for k, v in available_commands.items():
+						print("{}\t\t\t{}".format(k, v))
+			except Exception as e:
+				ERROR("failed to execute command {}, because {}".format(command, e))
+
+			if not self.exit_signal:
+				command = ""
+				while len(command.strip().split()) < 1:
+					command = input("######### please type your command any time, supported command: ##########\n{}\n".\
+									format(list(available_commands.keys()))).lower()
+					command_split = command.strip().split()
+
+
+def run_from_command_line(): 
+    parser = argparse.ArgumentParser(description='multiTaskSubmitter')
+
+    parser.add_argument("task", help="the path to task file")
+    parser.add_argument("-c", "--config", help="the path to config file", default="config.emory")
+
+    args = parser.parse_args()
+
+    task_loc = args.task 
+    config_loc = args.config 
+
+    mts = multiTaskSubmitter(config_loc=config_loc, task_loc=task_loc) 
+
+
+
+if __name__ == "__main__": 
+	run_from_command_line() 
+
+
+	# s = multiTaskSubmitter()
+	# s.check_node_health("jyan254", "lab3a", True)
+	# s.check_node_health("jyan254", "lab1a", True)
+	# s.listening_thread()
+	# s.submit_tasks()
+	# monitor_node()
+
+
+
+
