@@ -408,7 +408,7 @@ class multiTaskSubmitter:
 		while self.n_running_tasks < self.n_tasks:
 			if current_node_ind == self.n_nodes:
 				INFO("all nodes are full load right now, submitted {}/{} jobs, "\
-					"waiting for some tasks finish".format(self.n_running_tasks, self.n_tasks))
+					"waiting for some tasks finish".format(self.n_running_tasks, self.n_tasks), end="\r")
 				time.sleep(self.job_check_interval)
 				self.update_tasks_status()
 				current_node_ind = 0 
@@ -592,7 +592,7 @@ class multiTaskSubmitter:
 def run_from_command_line(): 
     parser = argparse.ArgumentParser(description='multiTaskSubmitter')
 
-    parser.add_argument("task", help="the path to task file")
+    parser.add_argument("-t", "--task", help="the path to task file", default="task")
     parser.add_argument("-c", "--config", help="the path to config file", default="config.emory")
 
     args = parser.parse_args()
