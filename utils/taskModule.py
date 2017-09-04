@@ -46,7 +46,7 @@ def load_task_status(task_status_loc="task.status"):
 
 	task_status_list = []
 	if not os.path.exists(task_status_loc): 
-		return tast_status_list
+		return task_status_list
 
 	# task1: finished, command: pwd, submit time: -1, last check time: 1502910768.866982, remote pid: -1, executing nodes: []
 	regex = re.compile(r"(?P<taskname>.+?): (?P<status>\w+?), command: (?P<command>.+?), "\
