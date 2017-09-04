@@ -66,6 +66,9 @@ class multiTaskSubmitter:
 		self.tasks 					= 		self.prepare_tasks()
 		self.output_retriever 		=		outputRetriever("scp")	# default 
 
+		self.log_output_folder = "{}.{}".format(self.task_parser["basic"]["jobname"], 
+								time.strftime("%Y-%m-%d-%H", time.localtime(time.time())))
+
 		self.init_variables()
 		self._get_available_nodes()
 
@@ -113,6 +116,7 @@ class multiTaskSubmitter:
 	def parse_tasks(self): 
 		assert os.path.exists(self.task_loc), "cannot find task file, default is {}".format(self.task_loc)
 		cparser = configparser.ConfigParser() 
+		cparser.optionxform = str
 		cparser.read(self.task_loc)
 
 		assert "basic" in cparser, "cannot find basic info in taks file"
@@ -138,6 +142,13 @@ class multiTaskSubmitter:
 			taskcommand = task_item[1]
 			task = taskClass(taskname, taskcommand)
 			tasks[taskname] = task 
+
+		self.env = {}
+		if "env" in self.task_parser: 
+			for k, v in self.task_parser["env"].items():
+				self.env[k] = v
+		print(self.env)
+
 		return tasks 
 
 
@@ -294,7 +305,7 @@ class multiTaskSubmitter:
 
 	@staticmethod
 	def prepare_remote_script(taskname, taskcommand, output_folder, 
-								cwd=None, script_loc="task.sh"):
+								env, cwd=None, script_loc="task.sh"):
 		"""this func prepares the script that will execute the command on remote node, 
 			then print the process id
 			we may want to upload or transfer the computed results back 
@@ -304,10 +315,12 @@ class multiTaskSubmitter:
 		with open(script_loc, 'w') as ofile:
 			if isinstance(taskcommand, list) and len(taskcommand) > 1:
 				taskcommand = " ".join(taskcommand)
-			taskcommand = "{} > {}/{}".format(taskcommand, output_folder, taskname) 
+			taskcommand = "{} > {}/{} 2>&1".format(taskcommand, output_folder, taskname) 
 			if cwd is not None: 
 				ofile.write("cd {}\n".format(cwd))
 			ofile.write("mkdir {} 2>/dev/null\n".format(output_folder))
+			for k, v in env.items(): 
+				ofile.write("export {}={}\n".format(k, v))
 			ofile.write("nohup {} &\n".format(taskcommand))
 			ofile.write("echo $!\nsleep 2")
 		os.system("chmod +x {}".format(script_loc))
@@ -428,8 +441,8 @@ class multiTaskSubmitter:
 			if node is None:
 				continue 
 
-			multiTaskSubmitter.prepare_remote_script(taskname, task.taskcommand, self.output_folder, 
-								self.working_directory, script_loc) 
+			multiTaskSubmitter.prepare_remote_script(taskname, task.taskcommand, self.log_output_folder, 
+								self.env, self.working_directory, script_loc) 
 													
 			# create output folder
 			subprocess.run("ssh -q {}@{} -o StrictHostKeyChecking=no cd {} && mkdir -p {} 2>/dev/null".format(
